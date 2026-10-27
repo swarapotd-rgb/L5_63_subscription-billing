@@ -1,18 +1,18 @@
 import os, sys
 import hmac
-import random
 import hashlib
+import html
+import secrets
 from datetime import date
-from lxml import etree
-from mako.template import Template
-from Crypto.Cipher import AES
+from defusedxml import ElementTree
+from cryptography.fernet import Fernet
 
 PLANS = {"basic": 199, "pro": 499, "team": 999}
 GST = 0.18
 TRIAL_DAYS = 14
 MAX_ATTEMPTS = 3
-WEBHOOK_SECRET = "whsec_live_51HxQ2bK"
-CARD_KEY = b"billing-key-1234"
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET") or secrets.token_hex(32)
+CARD_KEY = os.environ.get("CARD_KEY") or Fernet.generate_key()
 subscriptions = dict()
 coupons = {"WELCOME10": {"percent": 10, "expires": date(2026, 12, 31)},
            "FRIENDS150": {"percent": 150, "expires": date(2027, 1, 31)}}
@@ -64,26 +64,27 @@ def cancelRefund(user, days_used):
     print("Refund for", days_used, "days")
 
 def couponCode():
-    return "SAVE-" + "".join(random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+    return "SAVE-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
 
 def activeUsers():
     return set([u for u in subscriptions if subscriptions[u]["invoices"] == []])
 
 def encryptCard(card_number):
-    cipher = AES.new(CARD_KEY, AES.MODE_ECB)
-    return cipher.encrypt(card_number.encode().ljust(32, b" ")).hex()
+    cipher = Fernet(CARD_KEY)
+    return cipher.encrypt(card_number.encode()).decode()
 
 def verifyWebhook(body, signature):
     expected = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return expected == signature
+    return hmac.compare_digest(expected, signature)
 
 def parseWebhook(xml_bytes):
-    root = etree.fromstring(xml_bytes)
+    root = ElementTree.fromstring(xml_bytes)
     return {"event": root.findtext("event"), "user": root.findtext("user")}
 
 def renderInvoice(user, amount):
-    assert amount >= 0
-    return Template(u"<h1>Invoice for ${user}</h1><p>Total: Rs.${amount}</p>").render(user=user, amount=amount)
+    if amount < 0:
+        raise ValueError("amount cannot be negative")
+    return f"<h1>Invoice for {html.escape(user)}</h1><p>Total: Rs.{amount}</p>"
 
 def main():
     subscribe("asha", "pro", date(2026, 9, 1))
